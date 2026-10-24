@@ -1,0 +1,45 @@
+server:
+  port: ${PORT:8080}
+
+spring:
+  application:
+    name: wallet-ledger
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/wallet}
+    username: ${DB_USER:wallet}
+    password: ${DB_PASSWORD:wallet}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+      # default isolation for every transaction unless code asks for more
+      transaction-isolation: TRANSACTION_READ_COMMITTED
+  flyway:
+    enabled: ${FLYWAY_ENABLED:true}
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+    deserialization:
+      fail-on-unknown-properties: true
+  main:
+    web-application-type: ${WEB_APPLICATION_TYPE:servlet}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+
+wallet:
+  worker:
+    enabled: ${WORKER_ENABLED:false}
+  reconciliation:
+    cron: ${RECONCILIATION_CRON:0 30 2 * * *}   # 02:30 Asia/Kolkata every night
+  fees:
+    withdrawal-paise: ${WITHDRAWAL_FEE_PAISE:0}
+  llm:
+    provider: ${LLM_PROVIDER:mock}            # mock | anthropic
+    anthropic:
+      api-key: ${ANTHROPIC_API_KEY:}
+      model: ${LLM_MODEL:claude-opus-5-5}
+
+logging:
+  pattern:
+    level: "%5p [%X{requestId:-}]"

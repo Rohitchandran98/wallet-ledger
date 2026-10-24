@@ -1,0 +1,92 @@
+# docker compose up            -> Postgres + API (:8080) + background worker (nightly reconciliation)
+# docker compose --profile seed run --rm seed    -> 1,000 users, 2,000 wallets, 100,000 transfers
+# docker compose --profile test run --rm tests   -> full test suite against the compose Postgres
+services:
+  postgres:
+    image: postgres:16.4
+    environment:
+      POSTGRES_DB: wallet
+      POSTGRES_USER: wallet
+      POSTGRES_PASSWORD: wallet
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wallet -d wallet"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  api:
+    build: .
+    image: wallet-ledger:local
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/wallet
+      DB_USER: wallet
+      DB_PASSWORD: wallet
+      WITHDRAWAL_FEE_PAISE: "200"          # ₹2 per withdrawal, booked as a FEE transfer
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}  # set to "anthropic" and export ANTHROPIC_API_KEY for real Claude
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8080/actuator/health || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  worker:
+    image: wallet-ledger:local
+    depends_on:
+      api:
+        condition: service_healthy   # api runs the Flyway migrations first
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/wallet
+      DB_USER: wallet
+      DB_PASSWORD: wallet
+      FLYWAY_ENABLED: "false"
+      WORKER_ENABLED: "true"
+      WEB_APPLICATION_TYPE: none
+      RECONCILIATION_CRON: ${RECONCILIATION_CRON:-0 30 2 * * *}
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+
+  seed:
+    profiles: ["seed"]
+    image: postgres:16.4
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: wallet
+    volumes:
+      - ./scripts:/scripts:ro
+    command: >
+      psql -h postgres -U wallet -d wallet -v ON_ERROR_STOP=1
+           -f /scripts/seed.sql
+           -c "CALL seed_wallet_data(1000, 2000, 100000);"
+
+  tests:
+    profiles: ["test"]
+    image: maven:3.9.11-eclipse-temurin-21
+    depends_on:
+      postgres:
+        condition: service_healthy
+    working_dir: /app
+    volumes:
+      - .:/app
+      - m2:/root/.m2
+    environment:
+      TEST_DB_URL: jdbc:postgresql://postgres:5432/wallet_test   # separate DB: tests wipe their schema
+      TEST_DB_USER: wallet
+      TEST_DB_PASSWORD: wallet
+    command: mvn -B verify
+
+volumes:
+  pgdata:
+  m2:
